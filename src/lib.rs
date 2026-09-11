@@ -13,12 +13,14 @@ use std::time::Duration;
 use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
-use transport::error::{Result, classify};
+use transport::error::{Result, classify, protocol_error};
+use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
-/// and the 20-byte IP header.
-const MAX_DATAGRAM: usize = 65_507;
+/// and the 20-byte IP header (RFC 791, RFC 768).
+pub const MAX_DATAGRAM: usize = 65_507;
 
+#[derive(Clone)]
 pub struct UdpTransport {
     bind: String,
     max_datagram: usize,
@@ -111,6 +113,64 @@ impl Transport for UdpTransport {
             .map_err(|e| classify("sending a datagram", &e))?;
 
         Ok(())
+    }
+}
+
+impl UdpTransport {
+    /// Both ends on this machine: an ephemeral local port, the loopback
+    /// timeout on the receive — a datagram that never arrives is a timeout,
+    /// which is what UDP is.
+    #[must_use]
+    pub fn loopback() -> Self {
+        Self::new("127.0.0.1:0").timing_out_after(LOOPBACK_TIMEOUT)
+    }
+}
+
+/// A bound socket waiting for its one datagram. Bound before the sender
+/// fires, or the datagram is gone.
+struct Bound {
+    transport: UdpTransport,
+    socket: UdpSocket,
+    address: String,
+}
+
+impl FarEnd for Bound {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
+    fn take_one(self: Box<Self>) -> Result<Arrived> {
+        self.transport.receive_one(&self.socket)
+    }
+}
+
+impl Loopback for UdpTransport {
+    fn ceiling(&self) -> Option<usize> {
+        Some(self.max_datagram)
+    }
+
+    fn far_end(&self) -> Result<Box<dyn FarEnd>> {
+        let (socket, address) = self.bind()?;
+        Ok(Box::new(Bound {
+            transport: self.clone(),
+            socket,
+            address,
+        }))
+    }
+
+    fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
+        if payload.len() > self.max_datagram {
+            return Err(protocol_error(format!(
+                "{} bytes is over the {} one datagram carries",
+                payload.len(),
+                self.max_datagram
+            )));
+        }
+        Self::new("127.0.0.1:0").send(address, payload)
+    }
+
+    fn unblock(&self, _address: &str) {
+        // The receive has its own timeout; there is no listener to poke.
     }
 }
 
