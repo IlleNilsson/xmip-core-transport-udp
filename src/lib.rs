@@ -13,7 +13,9 @@ use std::time::Duration;
 use transport::Arrived;
 use transport::Directions;
 use transport::Transport;
-use transport::error::{Result, classify, protocol_error};
+use transport::bound::{Bound, Reading};
+use transport::ceiling;
+use transport::error::{Result, classify};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
@@ -126,21 +128,11 @@ impl UdpTransport {
     }
 }
 
-/// A bound socket waiting for its one datagram. Bound before the sender
-/// fires, or the datagram is gone.
-struct Bound {
-    transport: UdpTransport,
-    socket: UdpSocket,
-    address: String,
-}
-
-impl FarEnd for Bound {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        self.transport.receive_one(&self.socket)
+impl Reading for UdpTransport {
+    /// A bound socket waiting for its one datagram. Bound before the sender
+    /// fires, or the datagram is gone.
+    fn take_one(self, socket: &UdpSocket) -> Result<Arrived> {
+        self.receive_one(socket)
     }
 }
 
@@ -150,22 +142,11 @@ impl Loopback for UdpTransport {
     }
 
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let (socket, address) = self.bind()?;
-        Ok(Box::new(Bound {
-            transport: self.clone(),
-            socket,
-            address,
-        }))
+        Ok(Box::new(Bound::new(self.clone(), self.bind()?)))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        if payload.len() > self.max_datagram {
-            return Err(protocol_error(format!(
-                "{} bytes is over the {} one datagram carries",
-                payload.len(),
-                self.max_datagram
-            )));
-        }
+        ceiling::within(payload.len(), self.max_datagram, "one datagram carries")?;
         Self::new("127.0.0.1:0").send(address, payload)
     }
 
