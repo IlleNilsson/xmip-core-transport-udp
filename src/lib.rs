@@ -149,10 +149,6 @@ impl Loopback for UdpTransport {
         ceiling::within(payload.len(), self.max_datagram, "one datagram carries")?;
         Self::new("127.0.0.1:0").send(address, payload)
     }
-
-    fn unblock(&self, _address: &str) {
-        // The receive has its own timeout; there is no listener to poke.
-    }
 }
 
 #[cfg(test)]
