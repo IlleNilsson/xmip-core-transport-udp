@@ -18,6 +18,8 @@ use transport::bound::{Bound, Reading};
 use transport::ceiling;
 use transport::error::{Result, classify};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+use transport::sender::Sender;
+use transport::socket;
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
@@ -29,6 +31,8 @@ pub struct UdpTransport {
     bind: String,
     max_datagram: usize,
     receive_timeout: Option<Duration>,
+    /// The socket every send leaves from, bound once.
+    sender: Sender,
 }
 
 impl UdpTransport {
@@ -38,6 +42,7 @@ impl UdpTransport {
             bind: bind.into(),
             max_datagram: MAX_DATAGRAM,
             receive_timeout: None,
+            sender: Sender::new(),
         }
     }
 
@@ -61,19 +66,7 @@ impl UdpTransport {
     ///
     /// Where the address is taken, malformed, or the read timeout cannot be set.
     pub fn bind(&self) -> Result<(UdpSocket, String)> {
-        let socket = UdpSocket::bind(&self.bind).map_err(|e| classify("binding the socket", &e))?;
-
-        if let Some(timeout) = self.receive_timeout {
-            socket
-                .set_read_timeout(Some(timeout))
-                .map_err(|e| classify("setting the read timeout", &e))?;
-        }
-
-        let local = socket
-            .local_addr()
-            .map_err(|e| classify("reading the bound address", &e))?;
-
-        Ok((socket, local.to_string()))
+        socket::bind_udp(&self.bind, self.receive_timeout)
     }
 
     /// Take one datagram from an already-bound socket.
@@ -109,14 +102,7 @@ impl Transport for UdpTransport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let socket =
-            UdpSocket::bind("0.0.0.0:0").map_err(|e| classify("binding the sending socket", &e))?;
-
-        socket
-            .send_to(bytes, target)
-            .map_err(|e| classify("sending a datagram", &e))?;
-
-        Ok(())
+        self.sender.send_to(bytes, target)
     }
 }
 
@@ -220,6 +206,21 @@ mod tests {
 
         assert_eq!(buffer, b"hello over udp");
         assert!(peer.to_string().starts_with("127.0.0.1:"));
+    }
+
+    #[test]
+    fn every_send_leaves_from_the_one_socket_the_transport_bound() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("binding");
+        let address = socket.local_addr().expect("address").to_string();
+        let transport = UdpTransport::new("127.0.0.1:0");
+        let mut peers = Vec::new();
+        for n in 0..10u8 {
+            transport.clone().send(&address, &[n]).expect("sent");
+            let mut buffer = [0u8; 2];
+            peers.push(socket.recv_from(&mut buffer).expect("received").1);
+        }
+        peers.dedup();
+        assert_eq!((peers.len(), transport.sender.bound()), (1, 1));
     }
 
     #[test]
