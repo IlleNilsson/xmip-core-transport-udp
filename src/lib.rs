@@ -11,12 +11,14 @@ use std::net::UdpSocket;
 use std::time::Duration;
 
 use transport::Arrived;
+use transport::Configured;
 use transport::Directions;
 use transport::Transport;
 use transport::bound::{Bound, Reading};
 use transport::ceiling;
 use transport::error::{Result, classify};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
 /// and the 20-byte IP header (RFC 791, RFC 768).
@@ -118,6 +120,29 @@ impl Transport for UdpTransport {
     }
 }
 
+impl Configured for UdpTransport {
+    /// The address is where a Receive Location binds; a Send Location's
+    /// target is each send's own. The one setting bounds a receive's wait.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[Setting {
+            name: "timeout",
+            kind: Kind::Duration,
+            presence: Presence::Optional,
+            meaning: "How long a receive waits for a datagram; unbounded when left out.",
+            applies: Applies::Receive,
+        }],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        let transport = Self::new(address);
+        Ok(match settings.optional_duration("timeout") {
+            Some(timeout) => transport.timing_out_after(timeout),
+            None => transport,
+        })
+    }
+}
+
 impl UdpTransport {
     /// Both ends on this machine: an ephemeral local port, the loopback
     /// timeout on the receive — a datagram that never arrives is a timeout,
@@ -154,6 +179,21 @@ impl Loopback for UdpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xcore::settings::Given;
+
+    #[test]
+    fn udp_declares_its_settings_and_reads_through_them() {
+        assert_eq!(UdpTransport::SETTINGS.problems(), Vec::<String>::new());
+        let given = [("timeout".to_string(), Given::Text("250ms".to_string()))];
+        let transport =
+            UdpTransport::open("127.0.0.1:0", Applies::Receive, &given).expect("configured");
+        assert_eq!(transport.bind, "127.0.0.1:0");
+        assert_eq!(transport.receive_timeout, Some(Duration::from_millis(250)));
+        let Err(refused) = UdpTransport::open("127.0.0.1:0", Applies::Send, &given) else {
+            panic!("a Send Location reads no timeout");
+        };
+        assert!(refused.message.contains("timeout"), "{}", refused.message);
+    }
 
     #[test]
     fn udp_round_trip_carries_bytes_and_peer() {
