@@ -10,13 +10,14 @@
 use std::net::UdpSocket;
 use std::time::Duration;
 
+use net::{Target, ceiling};
 use transport::Arrived;
 use transport::Configured;
 use transport::Directions;
 use transport::Transport;
 use transport::bound::{Bound, Reading};
-use transport::ceiling;
 use transport::error::{Result, classify};
+use transport::kept::Kept;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::sender::Sender;
 use transport::socket;
@@ -33,6 +34,8 @@ pub struct UdpTransport {
     receive_timeout: Option<Duration>,
     /// The socket every send leaves from, bound once.
     sender: Sender,
+    /// The socket the first receive binds, and every receive reads.
+    receiving: Kept<UdpSocket>,
 }
 
 impl UdpTransport {
@@ -43,6 +46,7 @@ impl UdpTransport {
             max_datagram: MAX_DATAGRAM,
             receive_timeout: None,
             sender: Sender::new(),
+            receiving: Kept::new(),
         }
     }
 
@@ -82,8 +86,20 @@ impl UdpTransport {
 
         buffer.truncate(read);
 
-        Ok(Arrived::new(format!("udp://{peer}"), buffer))
+        Ok(Arrived::new(format!("{SCHEME}://{peer}"), buffer))
     }
+}
+
+/// The scheme an origin opens with: `udp://<peer>`.
+const SCHEME: &str = "udp";
+
+/// The peer an origin this transport wrote names — `10.0.0.5:7400` of
+/// `udp://10.0.0.5:7400` — or the origin whole where it is not one: what
+/// the protocols riding on UDP name the peer by in their own origins,
+/// read here where the origin is written rather than by each of them.
+#[must_use]
+pub fn peer_of(origin: &str) -> &str {
+    Target::under(&[SCHEME], origin).map_or(origin, |named| named.authority())
 }
 
 impl Transport for UdpTransport {
@@ -95,10 +111,11 @@ impl Transport for UdpTransport {
         Directions::BOTH
     }
 
+    /// One datagram, from the socket the first receive bound and kept: what
+    /// arrived between two receives waits in its buffer.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let (socket, _) = self.bind()?;
-
-        Ok(vec![self.receive_one(&socket)?])
+        let socket = self.receiving.bound(|| self.bind())?;
+        Ok(vec![self.receive_one(socket)?])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -241,6 +258,18 @@ mod tests {
 
         assert_eq!(arrived.bytes, b"aimed over udp");
         assert!(arrived.origin_uri.starts_with("udp://127.0.0.1:"));
+        assert!(peer_of(&arrived.origin_uri).starts_with("127.0.0.1:"));
+    }
+
+    #[test]
+    fn every_receive_reads_the_socket_the_first_bound() {
+        let receiver = UdpTransport::loopback();
+        receiver.receiving.bound(|| receiver.bind()).expect("bound");
+        let address = receiver.receiving.address().expect("address");
+        transport::kept::held_across_receives(&receiver, address, 5, |at, payload| {
+            UdpTransport::loopback().send(at, payload)
+        });
+        assert_eq!(receiver.receiving.address(), Some(address), "bound once");
     }
 
     #[test]
