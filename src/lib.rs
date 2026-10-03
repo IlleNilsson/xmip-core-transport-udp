@@ -6,11 +6,16 @@
 //! clearest case of a transport that **cannot answer**: a Contract failure here
 //! is audited and nothing more. HTTP is the same shape with a reply channel, and
 //! the two behave differently at the gate for exactly that reason.
+//!
+//! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): a datagram has
+//! nobody to answer, so the sender is never told how the receive cycle
+//! ended, and a crash before the Stream is durable loses it.
 
 use std::net::UdpSocket;
 use std::time::Duration;
 
 use net::{Target, ceiling};
+use transport::Acknowledgement;
 use transport::Arrived;
 use transport::Configured;
 use transport::Directions;
@@ -21,11 +26,16 @@ use transport::kept::Kept;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::sender::Sender;
 use transport::socket;
+use transport::taken::Taken;
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
 /// and the 20-byte IP header (RFC 791, RFC 768).
 pub const MAX_DATAGRAM: usize = 65_507;
+
+/// Why a datagram cannot be acknowledged after the receive cycle.
+pub const AT_MOST_ONCE: &str =
+    "a UDP datagram has no reply: nobody is left to be told how the receive cycle ended";
 
 #[derive(Clone)]
 pub struct UdpTransport {
@@ -73,7 +83,8 @@ impl UdpTransport {
         socket::bind_udp(&self.bind, self.receive_timeout)
     }
 
-    /// Take one datagram from an already-bound socket.
+    /// Take one datagram from an already-bound socket, whole. Acceptance is
+    /// at-most-once ([`AT_MOST_ONCE`]).
     ///
     /// # Errors
     ///
@@ -86,7 +97,11 @@ impl UdpTransport {
 
         buffer.truncate(read);
 
-        Ok(Arrived::new(format!("{SCHEME}://{peer}"), buffer))
+        Ok(Arrived::whole(
+            format!("{SCHEME}://{peer}"),
+            buffer,
+            Acknowledgement::at_most_once(AT_MOST_ONCE),
+        ))
     }
 }
 
@@ -111,8 +126,13 @@ impl Transport for UdpTransport {
         Directions::BOTH
     }
 
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered("each datagram is its own")
+    }
+
     /// One datagram, from the socket the first receive bound and kept: what
-    /// arrived between two receives waits in its buffer.
+    /// arrived between two receives waits in its buffer. Acceptance is
+    /// at-most-once here: a datagram has nobody to answer ([`AT_MOST_ONCE`]).
     fn receive(&self) -> Result<Vec<Arrived>> {
         let socket = self.receiving.bound(|| self.bind())?;
         Ok(vec![self.receive_one(socket)?])
@@ -159,8 +179,8 @@ impl UdpTransport {
 impl Reading for UdpTransport {
     /// A bound socket waiting for its one datagram. Bound before the sender
     /// fires, or the datagram is gone.
-    fn take_one(self, socket: &UdpSocket) -> Result<Arrived> {
-        self.receive_one(socket)
+    fn take_one(self, socket: &UdpSocket) -> Result<Taken> {
+        self.receive_one(socket)?.taken()
     }
 }
 
@@ -255,6 +275,8 @@ mod tests {
 
         let arrived = receiver.receive_one(&socket).expect("receiving");
         sender.join().expect("the sending thread panicked");
+        assert!(!arrived.defers(), "a datagram is at-most-once");
+        let arrived = arrived.taken().expect("taken");
 
         assert_eq!(arrived.bytes, b"aimed over udp");
         assert!(arrived.origin_uri.starts_with("udp://127.0.0.1:"));
