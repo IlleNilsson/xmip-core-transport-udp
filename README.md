@@ -15,6 +15,12 @@ A Receive Location binds its socket on its first receive and keeps it (`transpor
 
 `peer_of` reads the peer back out of an origin this technology wrote, `udp://<peer>`, for DDS, which names the peer in its own origin; until 2026-09-28 DDS cut it out itself.
 
+## Acknowledgement
+
+Acceptance is at-most-once here. A datagram has no reply: its sender is gone
+once it is sent, so nobody is told how the receive cycle ended, and a crash
+before the Stream is durable loses it. Each datagram arrives whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
