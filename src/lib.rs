@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use net::{Target, ceiling};
 use transport::Acknowledgement;
+use transport::ArrivalIdentity;
 use transport::Arrived;
 use transport::Configured;
 use transport::Directions;
@@ -101,7 +102,8 @@ impl UdpTransport {
             format!("{SCHEME}://{peer}"),
             buffer,
             Acknowledgement::at_most_once(AT_MOST_ONCE),
-        ))
+        )
+        .from_peer(peer))
     }
 }
 
@@ -185,6 +187,10 @@ impl Reading for UdpTransport {
 }
 
 impl Loopback for UdpTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::PEER
+    }
+
     fn ceiling(&self) -> Option<usize> {
         Some(self.max_datagram)
     }
@@ -281,6 +287,9 @@ mod tests {
         assert_eq!(arrived.bytes, b"aimed over udp");
         assert!(arrived.origin_uri.starts_with("udp://127.0.0.1:"));
         assert!(peer_of(&arrived.origin_uri).starts_with("127.0.0.1:"));
+        ArrivalIdentity::PEER.check(&arrived).expect("the peer");
+        let (_, peer) = arrived.observed.first().expect("observed");
+        assert_eq!(peer, peer_of(&arrived.origin_uri));
     }
 
     #[test]
@@ -297,5 +306,16 @@ mod tests {
     #[test]
     fn a_datagram_socket_has_no_artefact_to_claim() {
         assert!(UdpTransport::new("127.0.0.1:0").claims().is_none());
+    }
+
+    #[test]
+    fn a_round_hands_the_arrival_who_sent_it() {
+        // `Loopback::round` holds the far end's arrival to what
+        // `arrival_identity` says it carries.
+        let taken = UdpTransport::loopback()
+            .round(b"who sent this")
+            .expect("a round");
+        assert_eq!(taken.bytes, b"who sent this");
+        assert!(!taken.observed.is_empty(), "{taken:?}");
     }
 }
