@@ -132,6 +132,10 @@ impl Transport for UdpTransport {
         transport::Arrivals::Unordered("each datagram is its own")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("a read of the socket waits for a datagram")
+    }
+
     /// One datagram, from the socket the first receive bound and kept: what
     /// arrived between two receives waits in its buffer. Acceptance is
     /// at-most-once here: a datagram has nobody to answer ([`AT_MOST_ONCE`]).
