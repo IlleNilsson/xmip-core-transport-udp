@@ -139,12 +139,17 @@ impl Transport for UdpTransport {
     /// One datagram, from the socket the first receive bound and kept: what
     /// arrived between two receives waits in its buffer. Acceptance is
     /// at-most-once here: a datagram has nobody to answer ([`AT_MOST_ONCE`]).
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let socket = self.receiving.bound(|| self.bind())?;
         Ok(vec![self.receive_one(socket)?])
     }
 
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one datagram carries the whole body")
+    }
+
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         self.sender.send_to(bytes, target)
     }
 }
