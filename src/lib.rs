@@ -28,7 +28,7 @@ use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::sender::Sender;
 use transport::socket;
 use transport::taken::Taken;
-use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
+use xcore::settings::{Applies, Read, Settings};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
 /// and the 20-byte IP header (RFC 791, RFC 768).
@@ -59,15 +59,6 @@ impl UdpTransport {
             sender: Sender::new(),
             receiving: Kept::new(),
         }
-    }
-
-    /// Give up waiting for a datagram that never comes. UDP has no delivery
-    /// guarantee, so a receiver that does not time out waits forever when the
-    /// datagram is dropped.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.receive_timeout = Some(timeout);
-        self
     }
 
     /// Bind and report the address actually assigned.
@@ -159,24 +150,22 @@ impl Configured for UdpTransport {
     /// target is each send's own. The one setting bounds a receive's wait.
     const SETTINGS: &'static Settings = &Settings {
         technology: env!("CARGO_PKG_NAME"),
-        settings: &[Setting {
-            name: "timeout",
-            kind: Kind::Duration,
-            presence: Presence::Optional,
-            meaning: "How long a receive waits for a datagram; unbounded when left out.",
-            applies: Applies::Receive,
-        }],
+        settings: &[transport::configured::timeout(
+            Applies::Receive,
+            None,
+            "How long a receive waits for a datagram; unbounded when left out.",
+        )],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &[SCHEME];
 
-    fn configured(address: &str, settings: &Read) -> Result<Self> {
-        let transport = Self::new(address);
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => transport.timing_out_after(timeout),
-            None => transport,
-        })
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.receive_timeout)
+    }
+
+    fn configured(address: &str, _settings: &Read) -> Result<Self> {
+        Ok(Self::new(address))
     }
 }
 
