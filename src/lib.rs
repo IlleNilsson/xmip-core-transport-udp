@@ -45,7 +45,7 @@ pub struct UdpTransport {
     receive_timeout: Option<Duration>,
     /// The socket every send leaves from, bound once.
     sender: Sender,
-    /// The socket the first receive binds, and every receive reads.
+    /// The socket its open binds, and every receive reads.
     receiving: Kept<UdpSocket>,
 }
 
@@ -127,11 +127,11 @@ impl Transport for UdpTransport {
         transport::Waiting::Waits("a read of the socket waits for a datagram")
     }
 
-    /// One datagram, from the socket the first receive bound and kept: what
+    /// One datagram, from the socket its open bound and kept: what
     /// arrived between two receives waits in its buffer. Acceptance is
     /// at-most-once here: a datagram has nobody to answer ([`AT_MOST_ONCE`]).
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
-        let socket = self.receiving.bound(|| self.bind())?;
+        let socket = self.receiving.listener()?;
         Ok(vec![self.receive_one(socket)?])
     }
 
@@ -166,6 +166,12 @@ impl Configured for UdpTransport {
 
     fn configured(address: &str, _settings: &Read) -> Result<Self> {
         Ok(Self::new(address))
+    }
+
+    /// The socket every receive takes from, bound where a Receive Location
+    /// listens.
+    fn listening(&self) -> Result<Option<&str>> {
+        self.receiving.listening(|| self.bind())
     }
 }
 
