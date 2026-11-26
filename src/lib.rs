@@ -10,34 +10,49 @@
 //! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): a datagram has
 //! nobody to answer, so the sender is never told how the receive cycle
 //! ended, and a crash before the Stream is durable loses it.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+
+#[cfg(feature = "default")]
 use std::net::UdpSocket;
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
+use declaration::SCHEME;
+#[cfg(feature = "default")]
 use net::{Target, ceiling};
-use transport::Acknowledgement;
-use transport::ArrivalIdentity;
-use transport::Arrived;
-use transport::Configured;
-use transport::Directions;
-use transport::Transport;
+#[cfg(feature = "default")]
 use transport::bound::{Bound, Reading};
+#[cfg(feature = "default")]
 use transport::error::{Result, classify};
-use transport::kept::Kept;
+#[cfg(feature = "default")]
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::sender::Sender;
-use transport::socket;
-use transport::taken::Taken;
-use xcore::settings::{Applies, Read, Settings};
+#[cfg(feature = "default")]
+use transport::{
+    Acknowledgement, ArrivalIdentity, Arrived, Configured, Directions, Transport, kept::Kept,
+    sender::Sender, socket, taken::Taken,
+};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
 /// The largest a UDP payload can be over IPv4: 65535 less the 8-byte UDP header
 /// and the 20-byte IP header (RFC 791, RFC 768).
+#[cfg(feature = "default")]
 pub const MAX_DATAGRAM: usize = 65_507;
 
 /// Why a datagram cannot be acknowledged after the receive cycle.
+#[cfg(feature = "default")]
 pub const AT_MOST_ONCE: &str =
     "a UDP datagram has no reply: nobody is left to be told how the receive cycle ended";
 
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct UdpTransport {
     bind: String,
@@ -49,6 +64,7 @@ pub struct UdpTransport {
     receiving: Kept<UdpSocket>,
 }
 
+#[cfg(feature = "default")]
 impl UdpTransport {
     #[must_use]
     pub fn new(bind: impl Into<String>) -> Self {
@@ -98,18 +114,17 @@ impl UdpTransport {
     }
 }
 
-/// The scheme an origin opens with: `udp://<peer>`.
-const SCHEME: &str = "udp";
-
 /// The peer an origin this transport wrote names — `10.0.0.5:7400` of
 /// `udp://10.0.0.5:7400` — or the origin whole where it is not one: what
 /// the protocols riding on UDP name the peer by in their own origins,
 /// read here where the origin is written rather than by each of them.
+#[cfg(feature = "default")]
 #[must_use]
 pub fn peer_of(origin: &str) -> &str {
     Target::under(&[SCHEME], origin).map_or(origin, |named| named.authority())
 }
 
+#[cfg(feature = "default")]
 impl Transport for UdpTransport {
     fn name(&self) -> &'static str {
         "udp"
@@ -145,20 +160,10 @@ impl Transport for UdpTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for UdpTransport {
-    /// The address is where a Receive Location binds; a Send Location's
-    /// target is each send's own. The one setting bounds a receive's wait.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[transport::configured::timeout(
-            Applies::Receive,
-            None,
-            "How long a receive waits for a datagram; unbounded when left out.",
-        )],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &[SCHEME];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.receive_timeout)
@@ -175,6 +180,7 @@ impl Configured for UdpTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl UdpTransport {
     /// Both ends on this machine: an ephemeral local port, the loopback
     /// timeout on the receive — a datagram that never arrives is a timeout,
@@ -185,6 +191,7 @@ impl UdpTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Reading for UdpTransport {
     /// A bound socket waiting for its one datagram. Bound before the sender
     /// fires, or the datagram is gone.
@@ -193,6 +200,7 @@ impl Reading for UdpTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Loopback for UdpTransport {
     fn arrival_identity(&self) -> ArrivalIdentity {
         ArrivalIdentity::PEER
@@ -215,7 +223,7 @@ impl Loopback for UdpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcore::settings::Given;
+    use xcore::settings::{Applies, Given};
 
     #[test]
     fn udp_declares_its_settings_and_reads_through_them() {
